@@ -1,6 +1,7 @@
 package main
 
 import (
+	"Ylang/internal/ip"
 	"errors"
 	"fmt"
 	"github.com/google/gopacket"
@@ -21,11 +22,17 @@ type NetDevice struct {
 
 func main() {
 	// 本地网卡名称
-	netDevName := ""
+	upDevName := ""
+	// 本地网卡设备
+	var upDev *NetDevice
+	// 本地网卡和上游server端的连接
+	var upDevConn net.Conn
+
 	// 监听目标主机IP和网关IP（ns中手动设置的值）
 	targetIP := "10.0.0.2"
+	// destIP -> targetDeviceMAC
+	nat := make(map[string]net.HardwareAddr)
 	targetGatewayIP := "10.0.0.1"
-
 	// 服务端IP
 	serverIP := "127.0.0.1:54321"
 
@@ -56,8 +63,7 @@ func main() {
 	// 网关ip
 	gatewayIp, _ := gateway.DiscoverGateway()
 
-	var upDev *NetDevice
-	if netDevName == "" {
+	if upDevName == "" {
 		for _, device := range netDevices {
 			for _, addr := range device.ipAdders {
 				// 判断当前网卡和网关是不是一个网段
@@ -73,7 +79,7 @@ func main() {
 		}
 	} else {
 		for _, dev := range netDevices {
-			if dev.name == netDevName {
+			if dev.name == upDevName {
 				upDev = dev
 				break
 			}
@@ -86,7 +92,7 @@ func main() {
 	gatewayDev, _ := findGatewayDev(upDev, gatewayIp)
 	fmt.Println(gatewayDev.hwAddr)
 
-	// 监听局域网目标主机的流量
+	// 监听局域网目标主机的发送到本地upDev网卡流量
 	handle, err := pcap.OpenLive(upDev.name, 65535, true, pcap.BlockForever)
 	if err != nil {
 		fmt.Println(err)
@@ -107,6 +113,10 @@ func main() {
 		for {
 			packet := <-packetSource.Packets()
 
+			ethernet := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+			ipv4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+			// full-cone NAT 记录destIP -> MAC地址映射
+			nat[ipv4.DstIP.String()] = ethernet.SrcMAC
 			// 如果是 ARPRequest 伪装层网关进行回应
 			layer := packet.Layer(layers.LayerTypeARP)
 			if layer != nil {
@@ -118,28 +128,47 @@ func main() {
 			}
 
 			// 1. udp over tcp模式
-			upConn, err := net.Dial("tcp", serverIP)
+			upDevConn, err = net.Dial("tcp", serverIP)
 			if err != nil {
 				fmt.Println(err)
-				return
 			}
 			// 通过tcp转发网络层数据（server端在facktcp模式需要手动重组，然后再分片发送到目标服务）
-			if _, err := upConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
+			if _, err := upDevConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
 				fmt.Println(err)
 				return
 			}
-
-			// 接受server响应（也是网络层数据，最大65534）
-			b := make([]byte, 1<<16-1)
-			if _, err := upConn.Read(b); err != nil {
-				return
-			}
-
-			// 回传给目标主机（需要手动IP分片）
 		}
 	}()
 
-	time.Sleep(1 * time.Hour)
+	for {
+		// 接受server响应（也是网络层数据，最大65534）
+		b := make([]byte, 1<<16-1)
+		n, err := upDevConn.Read(b)
+		if err != nil {
+			fmt.Println(err)
+		}
+		packet := gopacket.NewPacket(b[:n], layers.LayerTypeEthernet, gopacket.NoCopy)
+		// ethernet := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+		ipLayer := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+		if ipLayer == nil {
+			log.Fatal("Could not decode IPv4 layer")
+		}
+		targetMAC := nat[ipLayer.SrcIP.String()]
+		// 以太网层
+		ethLayer := &layers.Ethernet{
+			SrcMAC:       upDev.hwAddr,
+			DstMAC:       targetMAC,
+			EthernetType: layers.EthernetTypeARP,
+		}
+
+		// 回传给目标主机（需要手动IP分片）
+		frags := ip.FragmentIPPacket(ethLayer, ipLayer, 1500)
+		for _, frag := range frags {
+			if err := handle.WritePacketData(frag); err != nil {
+				fmt.Println(err)
+			}
+		}
+	}
 }
 
 // handleARPSpoofing 处理ARP欺骗，伪装网关响应ARP请求
