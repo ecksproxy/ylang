@@ -1,4 +1,4 @@
-package ip
+package ip4
 
 import (
 	"fmt"
