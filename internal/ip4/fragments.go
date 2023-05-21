@@ -8,7 +8,7 @@ import (
 )
 
 // FragmentIPPacket 对IP包进行分片
-func FragmentIPPacket(ethLayer *layers.Ethernet, ipLayer *layers.IPv4, mtu uint16) [][]byte {
+func FragmentIPPacket(ethLayer *layers.Ethernet, ipLayer *layers.IPv4, payload gopacket.Payload, mtu uint16) [][]byte {
 	// 计算分片数量
 	numFragments := int(ipLayer.Length/mtu) + 1
 
@@ -18,9 +18,7 @@ func FragmentIPPacket(ethLayer *layers.Ethernet, ipLayer *layers.IPv4, mtu uint1
 	fragmentSize := mtu - 4*uint16(ipLayer.IHL)
 
 	// 总长度
-	totalLen := uint16(len(ipLayer.Contents))
-	payload := ipLayer.Payload
-
+	totalLen := ipLayer.Length
 	// 分片偏移量
 	offset := uint16(0)
 
@@ -47,7 +45,7 @@ func FragmentIPPacket(ethLayer *layers.Ethernet, ipLayer *layers.IPv4, mtu uint1
 
 		options := gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true}
 		buffer := gopacket.NewSerializeBuffer()
-		err := gopacket.SerializeLayers(buffer, options, ethLayer, &newIP)
+		err := gopacket.SerializeLayers(buffer, options, ethLayer, &newIP, gopacket.Payload(newIP.Payload))
 		if err != nil {
 			fmt.Println(err)
 			return nil

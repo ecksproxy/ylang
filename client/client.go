@@ -3,6 +3,7 @@ package main
 import (
 	"Ylang/internal/eth"
 	"Ylang/internal/ip4"
+	"Ylang/internal/lan"
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -23,12 +24,18 @@ func main() {
 	// 监听目标主机IP和网关IP（ns中手动设置的值）
 	targetIP := "10.0.0.2"
 	// destIP -> targetDeviceMAC
-	nat := make(map[string]net.HardwareAddr)
+	nat := make(map[string]*lan.ActiveHostConn)
 	targetGatewayIP := "10.0.0.1"
 	// 服务端IP
-	serverIP := "127.0.0.1:54321"
+	serverIP := "192.168.1.102:54321"
 	// 网关ip
 	gatewayIp, _ := gateway.DiscoverGateway()
+
+	// 1. udp over tcp模式
+	srvConn, err := net.Dial("tcp", serverIP)
+	if err != nil {
+		fmt.Println(err)
+	}
 
 	nic = eth.FindNIC(nicName)
 	fmt.Println(nic)
@@ -45,7 +52,7 @@ func main() {
 	}
 
 	// 局域网其他主机（ns）发出的tcp/udp包，以及arp请求的包
-	if err := handle.SetBPFFilter(fmt.Sprintf("((tcp || udp) && (src host %s)) || (arp[6:2] = 1 && dst host %s)",
+	if err := handle.SetBPFFilter(fmt.Sprintf("(ip && ((tcp || udp) && (src host %s))) || (arp[6:2] = 1 && dst host %s)",
 		targetIP, targetGatewayIP)); err != nil {
 		fmt.Println(err)
 		return
@@ -56,15 +63,12 @@ func main() {
 
 	go func() {
 		for {
+			// 监听局域网内设备
 			packet := <-packetSource.Packets()
-
 			ethernet := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
-			ipv4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-			// full-cone NAT 记录destIP -> MAC地址映射
-			nat[ipv4.DstIP.String()] = ethernet.SrcMAC
-			// 如果是 ARPRequest 伪装层网关进行回应
 			layer := packet.Layer(layers.LayerTypeARP)
 			if layer != nil {
+				// 如果是 ARPRequest 伪装层网关进行回应
 				err := handleARPSpoofing(layer.(*layers.ARP), nic, handle)
 				if err != nil {
 					fmt.Println(err)
@@ -72,11 +76,19 @@ func main() {
 				continue
 			}
 
-			// 1. udp over tcp模式
-			srvConn, err = net.Dial("tcp", serverIP)
-			if err != nil {
-				fmt.Println(err)
+			ac := &lan.ActiveHostConn{Mac: ethernet.SrcMAC, IP: net.ParseIP(targetIP)}
+			ipv4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+			switch ipv4.Protocol {
+			case layers.IPProtocolTCP:
+				ac.Port = uint16(packet.Layer(layers.LayerTypeTCP).(*layers.TCP).SrcPort)
+			case layers.IPProtocolUDP:
+				ac.Port = uint16(packet.Layer(layers.LayerTypeUDP).(*layers.UDP).SrcPort)
+			default:
+				fmt.Printf("unsupported protocol: %s\n", ipv4.Protocol)
 			}
+			// full-cone NAT 记录destIP -> MAC地址映射
+			nat[ipv4.DstIP.String()] = ac
+
 			// 通过tcp转发网络层数据（server端在facktcp模式需要手动重组，然后再分片发送到目标服务）
 			if _, err := srvConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
 				fmt.Println(err)
@@ -86,7 +98,7 @@ func main() {
 	}()
 
 	for {
-		// 接受server响应（也是网络层数据，最大65534）
+		// 接受server响应（也是网络层数据，最大65535）
 		b := make([]byte, 1<<16-1)
 		n, err := srvConn.Read(b)
 		if err != nil {
@@ -97,16 +109,56 @@ func main() {
 		if ipLayer == nil {
 			log.Fatal("Could not decode IPv4 layer")
 		}
-		targetMAC := nat[ipLayer.SrcIP.String()]
+		// TODO: 修正数据包
+		ac := nat[ipLayer.SrcIP.String()]
 		// 以太网层
 		ethLayer := &layers.Ethernet{
 			SrcMAC:       nic.HwAddr(),
-			DstMAC:       targetMAC,
+			DstMAC:       ac.Mac,
 			EthernetType: layers.EthernetTypeIPv4,
 		}
 
+		// 修正 SrcIP/DstIP
+		ipLayer.SrcIP = nic.IPAddr()
+		ipLayer.DstIP = net.ParseIP(targetIP)
+		// 修正传输层数据 SrcPort/DstPort
+		switch packet.TransportLayer().LayerType() {
+		case layers.LayerTypeTCP:
+			tcpLayer := packet.TransportLayer().(*layers.TCP)
+			port, err := lan.FindSrcPort(packet)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			tcpLayer.SrcPort = layers.TCPPort(port)
+			tcpLayer.DstPort = layers.TCPPort(ac.Port)
+			// 设置伪头部
+			if err := tcpLayer.SetNetworkLayerForChecksum(ipLayer); err != nil {
+				fmt.Println(err)
+				return
+			}
+
+		case layers.LayerTypeUDP:
+			udpLayer := packet.TransportLayer().(*layers.UDP)
+			port, err := lan.FindSrcPort(packet)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			udpLayer.SrcPort = layers.UDPPort(port)
+			udpLayer.DstPort = layers.UDPPort(ac.Port)
+			// 设置伪头部
+			if err := udpLayer.SetNetworkLayerForChecksum(ipLayer); err != nil {
+				fmt.Println(err)
+				return
+			}
+		default:
+			fmt.Printf("unsupport lan layer %s", packet.TransportLayer().LayerType())
+			return
+		}
+
 		// 回传给目标主机（需要手动IP分片）
-		frags := ip4.FragmentIPPacket(ethLayer, ipLayer, eth.MTU)
+		frags := ip4.FragmentIPPacket(ethLayer, ipLayer, ipLayer.Payload, eth.MTU)
 		for _, frag := range frags {
 			if err := handle.WritePacketData(frag); err != nil {
 				fmt.Println(err)
@@ -127,10 +179,10 @@ func handleARPSpoofing(arpReq *layers.ARP, nic *eth.Device, handle *pcap.Handle)
 
 	// ARP层
 	arpLayer := &layers.ARP{
-		AddrType:        layers.LinkTypeEthernet,
-		Protocol:        layers.EthernetTypeARP,
-		HwAddressSize:   6,
-		ProtAddressSize: 4,
+		AddrType:        arpReq.AddrType,
+		Protocol:        arpReq.Protocol,
+		HwAddressSize:   arpReq.HwAddressSize,
+		ProtAddressSize: arpReq.ProtAddressSize,
 		Operation:       layers.ARPReply,
 		// 伪装成目标主机网关
 		SourceHwAddress:   nic.HwAddr(),
