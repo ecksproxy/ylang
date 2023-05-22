@@ -88,7 +88,7 @@ func main() {
 			}
 			// full-cone NAT 记录destIP -> MAC地址映射
 			nat[ipv4.DstIP.String()] = ac
-
+			fmt.Println(ac)
 			// 通过tcp转发网络层数据（server端在facktcp模式需要手动重组，然后再分片发送到目标服务）
 			if _, err := srvConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
 				fmt.Println(err)
@@ -119,18 +119,19 @@ func main() {
 		}
 
 		// 修正 SrcIP/DstIP
-		ipLayer.SrcIP = nic.IPAddr()
 		ipLayer.DstIP = net.ParseIP(targetIP)
+
+		options := gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true}
+		buffer := gopacket.NewSerializeBuffer()
+
 		// 修正传输层数据 SrcPort/DstPort
 		switch packet.TransportLayer().LayerType() {
 		case layers.LayerTypeTCP:
 			tcpLayer := packet.TransportLayer().(*layers.TCP)
-			port, err := lan.FindSrcPort(packet)
 			if err != nil {
 				fmt.Println(err)
 				return
 			}
-			tcpLayer.SrcPort = layers.TCPPort(port)
 			tcpLayer.DstPort = layers.TCPPort(ac.Port)
 			// 设置伪头部
 			if err := tcpLayer.SetNetworkLayerForChecksum(ipLayer); err != nil {
@@ -138,27 +139,38 @@ func main() {
 				return
 			}
 
-		case layers.LayerTypeUDP:
-			udpLayer := packet.TransportLayer().(*layers.UDP)
-			port, err := lan.FindSrcPort(packet)
+			err = gopacket.SerializeLayers(buffer, options, tcpLayer, gopacket.Payload(tcpLayer.Payload))
 			if err != nil {
 				fmt.Println(err)
 				return
 			}
-			udpLayer.SrcPort = layers.UDPPort(port)
+
+		case layers.LayerTypeUDP:
+			udpLayer := packet.TransportLayer().(*layers.UDP)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
 			udpLayer.DstPort = layers.UDPPort(ac.Port)
 			// 设置伪头部
 			if err := udpLayer.SetNetworkLayerForChecksum(ipLayer); err != nil {
 				fmt.Println(err)
 				return
 			}
+
+			err = gopacket.SerializeLayers(buffer, options, udpLayer, gopacket.Payload(udpLayer.Payload))
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
 		default:
 			fmt.Printf("unsupport lan layer %s", packet.TransportLayer().LayerType())
 			return
 		}
 
 		// 回传给目标主机（需要手动IP分片）
-		frags := ip4.FragmentIPPacket(ethLayer, ipLayer, ipLayer.Payload, eth.MTU)
+		frags := ip4.FragmentIPPacket(ethLayer, ipLayer, buffer.Bytes(), eth.MTU)
 		for _, frag := range frags {
 			if err := handle.WritePacketData(frag); err != nil {
 				fmt.Println(err)
