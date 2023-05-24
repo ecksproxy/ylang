@@ -50,6 +50,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
+	defer handle.Close()
 
 	// 局域网其他主机（ns）发出的tcp/udp包，以及arp请求的包
 	if err := handle.SetBPFFilter(fmt.Sprintf("(ip && ((tcp || udp) && (src host %s))) || (arp[6:2] = 1 && dst host %s)",

@@ -42,6 +42,11 @@ func main() {
 
 	// 监听nic设备，通过NIC设备发送到目标服务器
 	nicHandle, err := pcap.OpenLive(nic.Name(), 65535, true, pcap.BlockForever)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer nicHandle.Close()
 	// 监听所有进入的tcp/udp的包，除了client发来的包
 	err = nicHandle.SetBPFFilter(fmt.Sprintf("ip && ((tcp || udp) && (not dst port %d)) && (dst host %s)", listenPort, nic.IPAddr().String()))
 	if err != nil {
