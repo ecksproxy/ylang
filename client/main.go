@@ -1,13 +1,12 @@
 package main
 
 import (
-	"Ylang/internal/eth"
-	"Ylang/internal/ip4"
-	"Ylang/internal/lan"
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/imlgw/ylang/internal/eth"
+	"github.com/imlgw/ylang/internal/lan"
 	"github.com/jackpal/gateway"
 	"log"
 	"net"
@@ -24,10 +23,10 @@ func main() {
 	// 监听目标主机IP和网关IP（ns中手动设置的值）
 	targetIP := "10.0.0.2"
 	// destIP -> targetDeviceMAC
-	nat := make(map[string]*lan.ActiveHostConn)
+	nat := make(map[lan.SocketInfo]*lan.ActiveHostConn)
 	targetGatewayIP := "10.0.0.1"
 	// 服务端IP
-	serverIP := "192.168.1.102:54321"
+	serverIP := "192.168.1.100:54321"
 	// 网关ip
 	gatewayIp, _ := gateway.DiscoverGateway()
 
@@ -79,18 +78,25 @@ func main() {
 
 			ac := &lan.ActiveHostConn{Mac: ethernet.SrcMAC, IP: net.ParseIP(targetIP)}
 			ipv4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+
+			sktInfo := lan.SocketInfo{IP: ipv4.DstIP.String()}
+
 			switch ipv4.Protocol {
 			case layers.IPProtocolTCP:
 				ac.Port = uint16(packet.Layer(layers.LayerTypeTCP).(*layers.TCP).SrcPort)
+				sktInfo.Protocol = uint8(layers.IPProtocolTCP)
+				sktInfo.Port = uint16(packet.Layer(layers.LayerTypeTCP).(*layers.TCP).DstPort)
 			case layers.IPProtocolUDP:
 				ac.Port = uint16(packet.Layer(layers.LayerTypeUDP).(*layers.UDP).SrcPort)
+				sktInfo.Protocol = uint8(layers.IPProtocolUDP)
+				sktInfo.Port = uint16(packet.Layer(layers.LayerTypeUDP).(*layers.UDP).DstPort)
 			default:
 				fmt.Printf("unsupported protocol: %s\n", ipv4.Protocol)
 			}
 			// full-cone NAT 记录destIP -> MAC地址映射
-			nat[ipv4.DstIP.String()] = ac
+			nat[sktInfo] = ac
 			fmt.Println(ac)
-			// 通过tcp转发网络层数据（server端在facktcp模式需要手动重组，然后再分片发送到目标服务）
+			// 通过tcp转发网络层数据
 			if _, err := srvConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
 				fmt.Println(err)
 				return
@@ -106,12 +112,27 @@ func main() {
 			fmt.Println(err)
 		}
 		packet := gopacket.NewPacket(b[:n], layers.LayerTypeIPv4, gopacket.NoCopy)
+
+		fmt.Println("client re:", packet)
 		ipLayer := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 		if ipLayer == nil {
 			log.Fatal("Could not decode IPv4 layer")
 		}
+
+		sktInfo := lan.SocketInfo{IP: ipLayer.SrcIP.String()}
+		switch ipLayer.Protocol {
+		case layers.IPProtocolTCP:
+			sktInfo.Protocol = uint8(layers.IPProtocolTCP)
+			sktInfo.Port = uint16(packet.Layer(layers.LayerTypeTCP).(*layers.TCP).SrcPort)
+		case layers.IPProtocolUDP:
+			sktInfo.Protocol = uint8(layers.IPProtocolUDP)
+			sktInfo.Port = uint16(packet.Layer(layers.LayerTypeUDP).(*layers.UDP).SrcPort)
+		default:
+			fmt.Printf("unsupported protocol: %s\n", ipLayer.Protocol)
+		}
+
 		// TODO: 修正数据包
-		ac := nat[ipLayer.SrcIP.String()]
+		ac := nat[sktInfo]
 		// 以太网层
 		ethLayer := &layers.Ethernet{
 			SrcMAC:       nic.HwAddr(),
@@ -122,45 +143,22 @@ func main() {
 		// 修正 SrcIP/DstIP
 		ipLayer.DstIP = net.ParseIP(targetIP)
 
-		options := gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true}
-		buffer := gopacket.NewSerializeBuffer()
-
 		// 修正传输层数据 SrcPort/DstPort
-		switch packet.TransportLayer().LayerType() {
+		newTransLayer := packet.TransportLayer()
+		switch newTransLayer.LayerType() {
 		case layers.LayerTypeTCP:
-			tcpLayer := packet.TransportLayer().(*layers.TCP)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
+			tcpLayer := newTransLayer.(*layers.TCP)
 			tcpLayer.DstPort = layers.TCPPort(ac.Port)
 			// 设置伪头部
 			if err := tcpLayer.SetNetworkLayerForChecksum(ipLayer); err != nil {
 				fmt.Println(err)
 				return
 			}
-
-			err = gopacket.SerializeLayers(buffer, options, tcpLayer, gopacket.Payload(tcpLayer.Payload))
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-
 		case layers.LayerTypeUDP:
-			udpLayer := packet.TransportLayer().(*layers.UDP)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
+			udpLayer := newTransLayer.(*layers.UDP)
 			udpLayer.DstPort = layers.UDPPort(ac.Port)
 			// 设置伪头部
 			if err := udpLayer.SetNetworkLayerForChecksum(ipLayer); err != nil {
-				fmt.Println(err)
-				return
-			}
-
-			err = gopacket.SerializeLayers(buffer, options, udpLayer, gopacket.Payload(udpLayer.Payload))
-			if err != nil {
 				fmt.Println(err)
 				return
 			}
@@ -170,12 +168,15 @@ func main() {
 			return
 		}
 
-		// 回传给目标主机（需要手动IP分片）
-		frags := ip4.FragmentIPPacket(ethLayer, ipLayer, buffer.Bytes(), eth.MTU)
-		for _, frag := range frags {
-			if err := handle.WritePacketData(frag); err != nil {
-				fmt.Println(err)
-			}
+		options := gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true}
+		buffer := gopacket.NewSerializeBuffer()
+		// 回传给目标主机
+		if err := gopacket.SerializeLayers(buffer, options, ethLayer, ipLayer, newTransLayer.(gopacket.SerializableLayer),
+			gopacket.Payload(newTransLayer.LayerPayload())); err != nil {
+			return
+		}
+		if err := handle.WritePacketData(buffer.Bytes()); err != nil {
+			fmt.Println(err)
 		}
 	}
 }

@@ -1,11 +1,11 @@
 package t_test
 
 import (
-	"Ylang/internal/eth"
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/imlgw/ylang/internal/eth"
 	"net"
 	"testing"
 )
@@ -26,7 +26,7 @@ func TestPcap(t *testing.T) {
 		EthernetType: layers.EthernetTypeIPv4,
 	}
 
-	data := make([]byte, 2000)
+	data := make([]byte, 1550)
 	data[1499] = 1
 
 	packet := gopacket.NewPacket(data, layers.LayerTypeIPv4, gopacket.NoCopy)

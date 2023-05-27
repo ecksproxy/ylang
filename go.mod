@@ -1,4 +1,4 @@
-module Ylang
+module github.com/imlgw/ylang
 
 go 1.18
 

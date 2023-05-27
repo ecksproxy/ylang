@@ -13,6 +13,12 @@ type ActiveHostConn struct {
 	IP   net.IP
 }
 
+type SocketInfo struct {
+	IP       string
+	Port     uint16
+	Protocol uint8
+}
+
 // FindSrcPort 客户端源端口选择，模拟系统栈过程
 func FindSrcPort(packet gopacket.Packet) (uint16, error) {
 	rand.Seed(time.Now().UnixNano())
