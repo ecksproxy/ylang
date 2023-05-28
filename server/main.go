@@ -64,7 +64,8 @@ func main() {
 			buf := make([]byte, 65535)
 			n, err := cliConn.Read(buf)
 			if err != nil {
-				fmt.Println(err)
+				fmt.Println("read from client error", err)
+				return
 			}
 
 			packet := gopacket.NewPacket(buf[:n], layers.LayerTypeIPv4, gopacket.NoCopy)
@@ -162,7 +163,7 @@ func main() {
 			continue
 		}
 
-		fmt.Printf("recevie data: %s \n", packet.String())
+		// fmt.Printf("recevie data: %s \n", packet.String())
 
 		// IP包数据序列化后通过tcp回传给client
 		options := gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true}

@@ -26,7 +26,7 @@ func main() {
 	nat := make(map[lan.SocketInfo]*lan.ActiveHostConn)
 	targetGatewayIP := "10.0.0.1"
 	// 服务端IP
-	serverIP := "192.168.1.100:54321"
+	serverIP := "imlgw.top:54321"
 	// 网关ip
 	gatewayIp, _ := gateway.DiscoverGateway()
 
@@ -65,6 +65,7 @@ func main() {
 		for {
 			// 监听局域网内设备
 			packet := <-packetSource.Packets()
+			fmt.Println("from lan ns:", packet)
 			ethernet := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
 			layer := packet.Layer(layers.LayerTypeARP)
 			if layer != nil {
@@ -95,7 +96,6 @@ func main() {
 			}
 			// full-cone NAT 记录destIP -> MAC地址映射
 			nat[sktInfo] = ac
-			fmt.Println(ac)
 			// 通过tcp转发网络层数据
 			if _, err := srvConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
 				fmt.Println(err)
@@ -109,11 +109,12 @@ func main() {
 		b := make([]byte, 1<<16-1)
 		n, err := srvConn.Read(b)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("receive from server error:", err)
+			return
 		}
 		packet := gopacket.NewPacket(b[:n], layers.LayerTypeIPv4, gopacket.NoCopy)
 
-		fmt.Println("client re:", packet)
+		fmt.Println("receive from server:", packet)
 		ipLayer := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 		if ipLayer == nil {
 			log.Fatal("Could not decode IPv4 layer")
@@ -132,7 +133,10 @@ func main() {
 		}
 
 		// TODO: 修正数据包
-		ac := nat[sktInfo]
+		ac, ok := nat[sktInfo]
+		if !ok {
+			continue
+		}
 		// 以太网层
 		ethLayer := &layers.Ethernet{
 			SrcMAC:       nic.HwAddr(),

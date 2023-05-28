@@ -116,7 +116,7 @@ func FindGatewayNIC(upDev *Device, gateway net.IP) (*Device, error) {
 	if err := handle.SetBPFFilter(fmt.Sprintf("arp[6:2] = 2 && src host %s", gateway)); err != nil {
 		return nil, err
 	}
-	defer handle.Close()
+	// defer handle.Close()
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
 	// 以太网层
