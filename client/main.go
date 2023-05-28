@@ -19,21 +19,35 @@ func main() {
 	var nic *eth.Device
 	// 本地网卡和上游server端的连接
 	var srvConn net.Conn
-
+	// same to server: tcp/udp
+	var mode = "udp"
+	var err error
 	// 监听目标主机IP和网关IP（ns中手动设置的值）
 	targetIP := "10.0.0.2"
 	// destIP -> targetDeviceMAC
 	nat := make(map[lan.SocketInfo]*lan.ActiveHostConn)
 	targetGatewayIP := "10.0.0.1"
 	// 服务端IP
-	serverIP := "imlgw.top:54321"
+	serverIP := "192.168.1.100:54321"
 	// 网关ip
 	gatewayIp, _ := gateway.DiscoverGateway()
 
-	// 1. udp over tcp模式
-	srvConn, err := net.Dial("tcp", serverIP)
-	if err != nil {
-		fmt.Println(err)
+	switch mode {
+	case "udp":
+		srvConn, err = net.DialUDP("udp", nil, &net.UDPAddr{
+			IP:   net.ParseIP("81.70.49.117"),
+			Port: 54321,
+		})
+		if err != nil {
+			fmt.Println(err)
+		}
+	case "tcp":
+		srvConn, err = net.Dial("tcp", serverIP)
+		if err != nil {
+			fmt.Println(err)
+		}
+	default:
+		fmt.Println("unsupported mode")
 	}
 
 	nic = eth.FindNIC(nicName)
@@ -49,7 +63,6 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	defer handle.Close()
 
 	// 局域网其他主机（ns）发出的tcp/udp包，以及arp请求的包
 	if err := handle.SetBPFFilter(fmt.Sprintf("(ip && ((tcp || udp) && (src host %s))) || (arp[6:2] = 1 && dst host %s)",
@@ -65,6 +78,10 @@ func main() {
 		for {
 			// 监听局域网内设备
 			packet := <-packetSource.Packets()
+			if packet == nil {
+				continue
+			}
+			// data, ci, err2 := handle.ReadPacketData()
 			fmt.Println("from lan ns:", packet)
 			ethernet := packet.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
 			layer := packet.Layer(layers.LayerTypeARP)
@@ -96,11 +113,27 @@ func main() {
 			}
 			// full-cone NAT 记录destIP -> MAC地址映射
 			nat[sktInfo] = ac
-			// 通过tcp转发网络层数据
+
+			// 通过tcp/udp转发网络层数据
 			if _, err := srvConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
 				fmt.Println(err)
 				return
 			}
+
+			// switch srvConn.(type) {
+			// case *net.UDPConn:
+			// 	udpConn := srvConn.(*net.UDPConn)
+			// 	if _, err := udpConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
+			// 		fmt.Println(err)
+			// 		return
+			// 	}
+			// case *net.TCPConn:
+			// 	if _, err := srvConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
+			// 		fmt.Println(err)
+			// 		return
+			// 	}
+			// }
+
 		}
 	}()
 

@@ -7,6 +7,7 @@ import (
 	"github.com/google/gopacket/pcap"
 	"github.com/imlgw/ylang/internal/eth"
 	"github.com/imlgw/ylang/internal/lan"
+	"github.com/imlgw/ylang/internal/trans"
 	"github.com/jackpal/gateway"
 	"log"
 	"net"
@@ -22,8 +23,9 @@ func main() {
 	var nic *eth.Device
 	// 本地网卡和下游client端的连接
 	var cliConn net.Conn
+	var mode = "udp"
 	var listenPort = 54321
-	var nat = make(map[lan.SocketInfo]net.Conn)
+	var nat = make(map[lan.SocketInfo]*trans.Conn)
 	// 获取指定nic设备
 	nic = eth.FindNIC(nicName)
 
@@ -47,27 +49,45 @@ func main() {
 
 	// 监听客户端请求，转发给目标服务
 	go func() {
-		listen, err := net.ListenTCP("tcp", &net.TCPAddr{
-			IP:   nic.IPAddr(),
-			Port: listenPort,
-		})
-		if err != nil {
-			fmt.Println(err)
+		switch mode {
+		case "udp":
+			cliConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: listenPort})
+			if err != nil {
+				fmt.Println("udp err:", err)
+			}
+		case "tcp":
+			listen, err := net.ListenTCP("tcp", &net.TCPAddr{
+				IP:   nic.IPAddr(),
+				Port: listenPort,
+			})
+			if err != nil {
+				fmt.Println(err)
+			}
+			// TODO: 多客户端
+			cliConn, err = listen.AcceptTCP()
+			fmt.Printf("connect from: %s \n", cliConn.RemoteAddr().String())
+		default:
+			fmt.Println("unsupported mode")
 		}
-		fmt.Println(nic.IPAddr())
-		// TODO: 多客户端
-		cliConn, err = listen.AcceptTCP()
-		fmt.Printf("connect from: %s \n", cliConn.RemoteAddr().String())
 
 		for {
 			// tcp包payload是ip包数据，最大65535
 			buf := make([]byte, 65535)
-			n, err := cliConn.Read(buf)
-			if err != nil {
-				fmt.Println("read from client error", err)
-				return
+			n := 0
+			var client *net.UDPAddr
+			switch cliConn.(type) {
+			case *net.UDPConn:
+				conn := cliConn.(*net.UDPConn)
+				n, client, _ = conn.ReadFromUDP(buf)
+			case *net.TCPConn:
+				n, err = cliConn.Read(buf)
+				if err != nil {
+					fmt.Println("read from client error", err)
+					return
+				}
+			default:
+				fmt.Println("unsupported mode")
 			}
-
 			packet := gopacket.NewPacket(buf[:n], layers.LayerTypeIPv4, gopacket.NoCopy)
 			ipLayer := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 			if ipLayer == nil {
@@ -82,7 +102,7 @@ func main() {
 			}
 
 			// 修正 SrcIP
-			ipLayer.SrcIP = cliConn.LocalAddr().(*net.TCPAddr).IP
+			ipLayer.SrcIP = nic.IPAddr()
 			// 记录DstIP映射关系
 			sktInfo := lan.SocketInfo{IP: ipLayer.SrcIP.String()}
 
@@ -114,7 +134,7 @@ func main() {
 
 			// TODO: LOCK优化
 			lock.Lock()
-			nat[sktInfo] = cliConn
+			nat[sktInfo] = &trans.Conn{Conn: cliConn, UdpAddr: client}
 			lock.Unlock()
 
 			options := gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true}
@@ -157,7 +177,7 @@ func main() {
 
 		// nat记录客户端连接
 		lock.Lock()
-		cli, ok := nat[sktInfo]
+		c, ok := nat[sktInfo]
 		lock.Unlock()
 		if !ok {
 			continue
@@ -171,8 +191,19 @@ func main() {
 		if err := gopacket.SerializeLayers(buffer, options, ipLayer, gopacket.Payload(ipLayer.Payload)); err != nil {
 			fmt.Println(err)
 		}
-		if _, err := cli.Write(buffer.Bytes()); err != nil {
-			fmt.Println(err)
+
+		switch c.Conn.(type) {
+		case *net.UDPConn:
+			udpConn := c.Conn.(*net.UDPConn)
+			if _, err := udpConn.WriteToUDP(packet.LinkLayer().LayerPayload(), c.UdpAddr); err != nil {
+				fmt.Println(err)
+				return
+			}
+		case *net.TCPConn:
+			if _, err := c.Conn.Write(packet.LinkLayer().LayerPayload()); err != nil {
+				fmt.Println(err)
+				return
+			}
 		}
 	}
 }
