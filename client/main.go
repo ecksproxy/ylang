@@ -6,7 +6,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/imlgw/ylang/internal/eth"
-	"github.com/imlgw/ylang/internal/lan"
+	"github.com/imlgw/ylang/internal/trans"
 	"github.com/jackpal/gateway"
 	"log"
 	"net"
@@ -25,7 +25,7 @@ func main() {
 	// 监听目标主机IP和网关IP（ns中手动设置的值）
 	targetIP := "10.0.0.2"
 	// destIP -> targetDeviceMAC
-	nat := make(map[lan.SocketInfo]*lan.ActiveHostConn)
+	nat := make(map[trans.Socket]*trans.LanDev)
 	targetGatewayIP := "10.0.0.1"
 	// 服务端IP
 	serverIP := "192.168.1.100:54321"
@@ -94,10 +94,10 @@ func main() {
 				continue
 			}
 
-			ac := &lan.ActiveHostConn{Mac: ethernet.SrcMAC, IP: net.ParseIP(targetIP)}
+			ac := &trans.LanDev{Mac: ethernet.SrcMAC, IP: net.ParseIP(targetIP)}
 			ipv4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 
-			sktInfo := lan.SocketInfo{IP: ipv4.DstIP.String()}
+			sktInfo := trans.Socket{IP: ipv4.DstIP.String()}
 
 			switch ipv4.Protocol {
 			case layers.IPProtocolTCP:
@@ -119,21 +119,6 @@ func main() {
 				fmt.Println(err)
 				return
 			}
-
-			// switch srvConn.(type) {
-			// case *net.UDPConn:
-			// 	udpConn := srvConn.(*net.UDPConn)
-			// 	if _, err := udpConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
-			// 		fmt.Println(err)
-			// 		return
-			// 	}
-			// case *net.TCPConn:
-			// 	if _, err := srvConn.Write(packet.LinkLayer().LayerPayload()); err != nil {
-			// 		fmt.Println(err)
-			// 		return
-			// 	}
-			// }
-
 		}
 	}()
 
@@ -153,7 +138,7 @@ func main() {
 			log.Fatal("Could not decode IPv4 layer")
 		}
 
-		sktInfo := lan.SocketInfo{IP: ipLayer.SrcIP.String()}
+		sktInfo := trans.Socket{IP: ipLayer.SrcIP.String()}
 		switch ipLayer.Protocol {
 		case layers.IPProtocolTCP:
 			sktInfo.Protocol = uint8(layers.IPProtocolTCP)

@@ -6,7 +6,6 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/imlgw/ylang/internal/eth"
-	"github.com/imlgw/ylang/internal/lan"
 	"github.com/imlgw/ylang/internal/trans"
 	"github.com/jackpal/gateway"
 	"log"
@@ -25,7 +24,7 @@ func main() {
 	var cliConn net.Conn
 	var mode = "udp"
 	var listenPort = 54321
-	var nat = make(map[lan.SocketInfo]*trans.Conn)
+	var nat = make(map[trans.Socket]*trans.Conn)
 	// 获取指定nic设备
 	nic = eth.FindNIC(nicName)
 
@@ -104,7 +103,7 @@ func main() {
 			// 修正 SrcIP
 			ipLayer.SrcIP = nic.IPAddr()
 			// 记录DstIP映射关系
-			sktInfo := lan.SocketInfo{IP: ipLayer.SrcIP.String()}
+			sktInfo := trans.Socket{IP: ipLayer.SrcIP.String()}
 
 			newTransLayer := packet.TransportLayer()
 			// 构建传输层数据
@@ -161,7 +160,7 @@ func main() {
 		packet := <-receivePacketCh
 		ipLayer := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 
-		sktInfo := lan.SocketInfo{IP: ipLayer.DstIP.String()}
+		sktInfo := trans.Socket{IP: ipLayer.DstIP.String()}
 		switch packet.TransportLayer().LayerType() {
 		case layers.LayerTypeTCP:
 			tcpLayer := packet.TransportLayer().(*layers.TCP)
