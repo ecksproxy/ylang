@@ -109,9 +109,7 @@ func FindNIC(devName string) *Device {
 }
 
 // FindGatewayNIC 获取网关网卡设备
-func FindGatewayNIC(upDev *Device, gateway net.IP) (*Device, error) {
-	// 监听本机网卡数据包
-	handle, _ := pcap.OpenLive(upDev.name, 65535, true, pcap.BlockForever)
+func FindGatewayNIC(upDev *Device, handle *pcap.Handle, gateway net.IP) (*Device, error) {
 	// 监听 dst=gateway 的 arpReply 请求
 	if err := handle.SetBPFFilter(fmt.Sprintf("arp[6:2] = 2 && src host %s", gateway)); err != nil {
 		return nil, err

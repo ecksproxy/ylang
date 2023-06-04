@@ -3,20 +3,8 @@ package trans
 import (
 	"github.com/google/gopacket"
 	"math/rand"
-	"net"
 	"time"
 )
-
-type Conn struct {
-	Conn    net.Conn
-	UdpAddr *net.UDPAddr
-}
-
-type LanDev struct {
-	Mac  net.HardwareAddr
-	Port uint16
-	IP   net.IP
-}
 
 type Socket struct {
 	IP       string
