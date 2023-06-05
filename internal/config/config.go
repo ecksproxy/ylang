@@ -10,7 +10,6 @@ type Client struct {
 }
 
 type Server struct {
-	Mode       string `json:"mode"`
 	ListenPort int    `json:"listen_port"`
 	NicName    string `json:"nic_name"`
 }

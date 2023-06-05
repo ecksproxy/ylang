@@ -2,9 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"github.com/imlgw/ylang/config"
-	"github.com/imlgw/ylang/tunnel/wan"
 )
 
 var (
@@ -14,18 +11,18 @@ var (
 
 func main() {
 
-	tunnel, err := wan.NewTunnel(&config.Server{
-		NicName:    *nicName,
-		ListenPort: *listenPort,
-	})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	wan.Tunnels() <- tunnel
-	for tun := range wan.Tunnels() {
-		go tun.ForwardClientData()
-		go tun.BackwardServerData()
-	}
+	// tunnel, err := remote.NewRemoteProxy(&config.Server{
+	// 	NicName:    *nicName,
+	// 	ListenPort: *listenPort,
+	// })
+	// if err != nil {
+	// 	fmt.Println(err)
+	// 	return
+	// }
+	//
+	// remote.Tunnels() <- tunnel
+	// for tun := range remote.Tunnels() {
+	// 	go tun.ForwardClientData()
+	// 	go tun.BackwardServerData()
+	// }
 }

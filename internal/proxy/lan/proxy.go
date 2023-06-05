@@ -5,8 +5,8 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
-	"github.com/imlgw/ylang/codec"
-	"github.com/imlgw/ylang/config"
+	"github.com/imlgw/ylang/internal/codec"
+	"github.com/imlgw/ylang/internal/config"
 	"github.com/imlgw/ylang/internal/eth"
 	"github.com/imlgw/ylang/internal/trans"
 	"log"
@@ -20,11 +20,11 @@ var (
 	serverPort      int
 	mode            string
 	nicName         string
-	tunnelQueue     = make(chan *Tunnel, 10)
+	lanProxyQueue   = make(chan *Proxy, 2)
 	nat             map[trans.Socket]*Host
 )
 
-type Tunnel struct {
+type Proxy struct {
 	conn      net.Conn
 	nic       *eth.Device
 	nicHandle *pcap.Handle
@@ -36,52 +36,8 @@ type Host struct {
 	IP   net.IP
 }
 
-func Nat() map[trans.Socket]*Host {
-	return nat
-}
-
-func (lanTun *Tunnel) Conn() net.Conn {
-	return lanTun.conn
-}
-
-func (lanTun *Tunnel) Nic() *eth.Device {
-	return lanTun.nic
-}
-
-func (lanTun *Tunnel) NicHandle() *pcap.Handle {
-	return lanTun.nicHandle
-}
-
-func GetTargetIP() string {
-	return targetIP
-}
-
-func GetTargetGatewayIP() string {
-	return targetGatewayIP
-}
-
-func GetServerIP() string {
-	return serverIP
-}
-
-func GetServerPort() int {
-	return serverPort
-}
-
-func GetNicName() string {
-	return nicName
-}
-
-func GetMode() string {
-	return mode
-}
-
-func Tunnels() chan *Tunnel {
-	return tunnelQueue
-}
-
-func NewTunnel(cfg *config.Client) (*Tunnel, error) {
-	var newTun = &Tunnel{}
+func NewLanProxy(cfg *config.Client) (*Proxy, error) {
+	var newTun = &Proxy{}
 	var conn net.Conn
 	var err error
 	switch cfg.Mode {
@@ -125,14 +81,14 @@ func NewTunnel(cfg *config.Client) (*Tunnel, error) {
 }
 
 // ForwardLanDevice 处理局域网设备包, 转发到server
-func (lanTun *Tunnel) ForwardLanDevice() {
+func (lan *Proxy) ForwardLanDevice() {
 	// 局域网其他主机（ns）发出的tcp/udp包，以及arp请求的包
-	if err := lanTun.NicHandle().SetBPFFilter(fmt.Sprintf("(ip && ((tcp || udp) && (src host %s))) || (arp[6:2] = 1 && dst host %s)",
+	if err := lan.NicHandle().SetBPFFilter(fmt.Sprintf("(ip && ((tcp || udp) && (src host %s))) || (arp[6:2] = 1 && dst host %s)",
 		targetIP, targetGatewayIP)); err != nil {
 		fmt.Println(err)
 		return
 	}
-	packetSource := gopacket.NewPacketSource(lanTun.NicHandle(), lanTun.NicHandle().LinkType())
+	packetSource := gopacket.NewPacketSource(lan.NicHandle(), lan.NicHandle().LinkType())
 	for {
 		// 监听局域网内设备
 		packet := <-packetSource.Packets()
@@ -145,7 +101,7 @@ func (lanTun *Tunnel) ForwardLanDevice() {
 		layer := packet.Layer(layers.LayerTypeARP)
 		if layer != nil {
 			// 如果是 ARPRequest 伪装层网关进行回应
-			err := lanTun.handleARPSpoofing(layer.(*layers.ARP))
+			err := lan.handleARPSpoofing(layer.(*layers.ARP))
 			if err != nil {
 				fmt.Println(err)
 			}
@@ -173,7 +129,7 @@ func (lanTun *Tunnel) ForwardLanDevice() {
 		nat[sktInfo] = ac
 
 		// 通过tcp/udp转发网络层数据
-		if _, err := lanTun.Conn().Write(packet.LinkLayer().LayerPayload()); err != nil {
+		if _, err := lan.Conn().Write(packet.LinkLayer().LayerPayload()); err != nil {
 			fmt.Println(err)
 			return
 		}
@@ -181,11 +137,11 @@ func (lanTun *Tunnel) ForwardLanDevice() {
 }
 
 // BackwardLanDevice 处理回传的包，回传到局域网设备
-func (lanTun *Tunnel) BackwardLanDevice() {
+func (lan *Proxy) BackwardLanDevice() {
 	for {
 		// 接受server响应（也是网络层数据，最大65535）
 		b := make([]byte, 1<<16-1)
-		n, err := lanTun.Conn().Read(b)
+		n, err := lan.Conn().Read(b)
 		if err != nil {
 			fmt.Println("receive from server error:", err)
 			return
@@ -216,7 +172,7 @@ func (lanTun *Tunnel) BackwardLanDevice() {
 		}
 		// 以太网层
 		ethLayer := &layers.Ethernet{
-			SrcMAC:       lanTun.Nic().HwAddr(),
+			SrcMAC:       lan.Nic().HwAddr(),
 			DstMAC:       ac.Mac,
 			EthernetType: layers.EthernetTypeIPv4,
 		}
@@ -256,17 +212,17 @@ func (lanTun *Tunnel) BackwardLanDevice() {
 			fmt.Println(err)
 			continue
 		}
-		if err := lanTun.NicHandle().WritePacketData(serializeLayers); err != nil {
+		if err := lan.NicHandle().WritePacketData(serializeLayers); err != nil {
 			fmt.Println(err)
 		}
 	}
 }
 
 // handleARPSpoofing 处理ARP欺骗，伪装网关响应ARP请求
-func (lanTun *Tunnel) handleARPSpoofing(arpReq *layers.ARP) error {
+func (lan *Proxy) handleARPSpoofing(arpReq *layers.ARP) error {
 	// 以太网层
 	ethLayer := &layers.Ethernet{
-		SrcMAC:       lanTun.nic.HwAddr(),
+		SrcMAC:       lan.nic.HwAddr(),
 		DstMAC:       arpReq.SourceHwAddress,
 		EthernetType: layers.EthernetTypeARP,
 	}
@@ -279,7 +235,7 @@ func (lanTun *Tunnel) handleARPSpoofing(arpReq *layers.ARP) error {
 		ProtAddressSize: arpReq.ProtAddressSize,
 		Operation:       layers.ARPReply,
 		// 伪装成目标主机网关
-		SourceHwAddress:   lanTun.nic.HwAddr(),
+		SourceHwAddress:   lan.nic.HwAddr(),
 		SourceProtAddress: arpReq.DstProtAddress,
 		DstHwAddress:      arpReq.SourceHwAddress,
 		DstProtAddress:    arpReq.SourceProtAddress,
@@ -294,8 +250,52 @@ func (lanTun *Tunnel) handleARPSpoofing(arpReq *layers.ARP) error {
 	}
 
 	// write data
-	if err := lanTun.nicHandle.WritePacketData(buffer.Bytes()); err != nil {
+	if err := lan.nicHandle.WritePacketData(buffer.Bytes()); err != nil {
 		return err
 	}
 	return nil
+}
+
+func Nat() map[trans.Socket]*Host {
+	return nat
+}
+
+func (lan *Proxy) Conn() net.Conn {
+	return lan.conn
+}
+
+func (lan *Proxy) Nic() *eth.Device {
+	return lan.nic
+}
+
+func (lan *Proxy) NicHandle() *pcap.Handle {
+	return lan.nicHandle
+}
+
+func GetTargetIP() string {
+	return targetIP
+}
+
+func GetTargetGatewayIP() string {
+	return targetGatewayIP
+}
+
+func GetServerIP() string {
+	return serverIP
+}
+
+func GetServerPort() int {
+	return serverPort
+}
+
+func GetNicName() string {
+	return nicName
+}
+
+func GetMode() string {
+	return mode
+}
+
+func Proxies() chan *Proxy {
+	return lanProxyQueue
 }

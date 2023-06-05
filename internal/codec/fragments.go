@@ -1,4 +1,4 @@
-package frag
+package codec
 
 import (
 	"fmt"

@@ -3,8 +3,8 @@ package api
 import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/render"
-	"github.com/imlgw/ylang/config"
-	"github.com/imlgw/ylang/tunnel/lan"
+	"github.com/imlgw/ylang/internal/config"
+	"github.com/imlgw/ylang/internal/proxy/lan"
 	"net"
 	"net/http"
 )
@@ -35,13 +35,14 @@ func updateConfigs(writer http.ResponseWriter, request *http.Request) {
 		render.JSON(writer, request, newError("req invalid", err.Error()))
 		return
 	}
-	newTunnel, err := lan.NewTunnel(newConfig)
+	newProxy, err := lan.NewLanProxy(newConfig)
 	if err != nil {
 		render.Status(request, http.StatusBadRequest)
-		render.JSON(writer, request, newError("init tunnel error", err.Error()))
+		render.JSON(writer, request, newError("init proxy error", err.Error()))
 		return
 	}
-	lan.Tunnels() <- newTunnel
+	lan.Proxies() <- newProxy
+	// TODO: 关闭旧proxy
 }
 
 func getConfigs(writer http.ResponseWriter, request *http.Request) {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/imlgw/ylang/api"
 	"github.com/imlgw/ylang/internal/eth"
-	"github.com/imlgw/ylang/tunnel/lan"
+	"github.com/imlgw/ylang/internal/proxy/lan"
 	"github.com/jackpal/gateway"
 	"strconv"
 )
@@ -27,11 +27,11 @@ func main() {
 		}
 	}
 
-	for tun := range lan.Tunnels() {
+	for proxy := range lan.Proxies() {
 		// 根据网关IP获取网关设备信息（MAC地址）
-		gatewayNIC, _ := eth.FindGatewayNIC(tun.Nic(), tun.NicHandle(), gatewayIp)
+		gatewayNIC, _ := eth.FindGatewayNIC(proxy.Nic(), proxy.NicHandle(), gatewayIp)
 		fmt.Println(gatewayNIC)
-		go tun.ForwardLanDevice()
-		go tun.BackwardLanDevice()
+		go proxy.ForwardLanDevice()
+		go proxy.BackwardLanDevice()
 	}
 }

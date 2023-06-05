@@ -1,4 +1,4 @@
-package wan
+package remote
 
 import "net"
 
