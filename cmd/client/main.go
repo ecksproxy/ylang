@@ -31,7 +31,7 @@ func main() {
 		// 根据网关IP获取网关设备信息（MAC地址）
 		gatewayNIC, _ := eth.FindGatewayNIC(proxy.Nic(), proxy.NicHandle(), gatewayIp)
 		fmt.Println(gatewayNIC)
-		go proxy.ForwardLanDevice()
-		go proxy.BackwardLanDevice()
+		go proxy.Forward()
+		go proxy.Backward()
 	}
 }

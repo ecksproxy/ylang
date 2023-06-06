@@ -2,6 +2,9 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"github.com/imlgw/ylang/internal/config"
+	"github.com/imlgw/ylang/internal/proxy/remote"
 )
 
 var (
@@ -10,19 +13,13 @@ var (
 )
 
 func main() {
-
-	// tunnel, err := remote.NewRemoteProxy(&config.Server{
-	// 	NicName:    *nicName,
-	// 	ListenPort: *listenPort,
-	// })
-	// if err != nil {
-	// 	fmt.Println(err)
-	// 	return
-	// }
-	//
-	// remote.Tunnels() <- tunnel
-	// for tun := range remote.Tunnels() {
-	// 	go tun.ForwardClientData()
-	// 	go tun.BackwardServerData()
-	// }
+	proxy, err := remote.NewRemoteProxy(&config.Server{
+		NicName:    *nicName,
+		ListenPort: *listenPort,
+	})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	proxy.Start()
 }

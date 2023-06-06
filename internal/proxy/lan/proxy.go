@@ -25,9 +25,8 @@ var (
 )
 
 type Proxy struct {
-	conn      net.Conn
-	nic       *eth.Device
-	nicHandle *pcap.Handle
+	conn net.Conn
+	nic  *eth.Device
 }
 
 type Host struct {
@@ -70,18 +69,12 @@ func NewLanProxy(cfg *config.Client) (*Proxy, error) {
 
 	newTun.conn = conn
 	nic := eth.FindNIC(cfg.NicName)
-	handle, err := pcap.OpenLive(nic.Name(), 65535, true, pcap.BlockForever)
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
-	newTun.nicHandle = handle
 	newTun.nic = nic
 	return newTun, nil
 }
 
-// ForwardLanDevice 处理局域网设备包, 转发到server
-func (lan *Proxy) ForwardLanDevice() {
+// Forward 处理局域网设备包, 转发到server
+func (lan *Proxy) Forward() {
 	// 局域网其他主机（ns）发出的tcp/udp包，以及arp请求的包
 	if err := lan.NicHandle().SetBPFFilter(fmt.Sprintf("(ip && ((tcp || udp) && (src host %s))) || (arp[6:2] = 1 && dst host %s)",
 		targetIP, targetGatewayIP)); err != nil {
@@ -136,8 +129,8 @@ func (lan *Proxy) ForwardLanDevice() {
 	}
 }
 
-// BackwardLanDevice 处理回传的包，回传到局域网设备
-func (lan *Proxy) BackwardLanDevice() {
+// Backward 处理回传的包，回传到局域网设备
+func (lan *Proxy) Backward() {
 	for {
 		// 接受server响应（也是网络层数据，最大65535）
 		b := make([]byte, 1<<16-1)
@@ -250,7 +243,7 @@ func (lan *Proxy) handleARPSpoofing(arpReq *layers.ARP) error {
 	}
 
 	// write data
-	if err := lan.nicHandle.WritePacketData(buffer.Bytes()); err != nil {
+	if err := lan.nic.Handle().WritePacketData(buffer.Bytes()); err != nil {
 		return err
 	}
 	return nil
@@ -269,7 +262,7 @@ func (lan *Proxy) Nic() *eth.Device {
 }
 
 func (lan *Proxy) NicHandle() *pcap.Handle {
-	return lan.nicHandle
+	return lan.nic.Handle()
 }
 
 func GetTargetIP() string {

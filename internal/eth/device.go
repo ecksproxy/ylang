@@ -19,6 +19,7 @@ type Device struct {
 	name     string
 	ipAdders []*net.IPNet
 	hwAddr   net.HardwareAddr
+	handle   *pcap.Handle
 }
 
 func (d *Device) Name() string {
@@ -44,6 +45,41 @@ func (d *Device) IPAddr() net.IP {
 		}
 	}
 	return sourceIp
+}
+
+func (d *Device) openLive() error {
+	if d.name == "" {
+		return errors.New("device name not set")
+	}
+	handle, err := pcap.OpenLive(d.name, 65535, true, pcap.BlockForever)
+	if err != nil {
+		return err
+	}
+	d.handle = handle
+	return nil
+}
+
+func (d *Device) Handle() *pcap.Handle {
+	if d.handle == nil {
+		err := d.openLive()
+		if err != nil {
+			fmt.Println(err)
+			return nil
+		}
+	}
+	return d.handle
+}
+
+func (d *Device) Listen(bfp string) {
+	// 监听所有进入的tcp/udp的包，除了client发来的包
+	err := d.Handle().SetBPFFilter(bfp)
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
+func (d *Device) CloseHandle() {
+	d.handle.Close()
 }
 
 // FindLocalNICs 获取本机网卡设备
